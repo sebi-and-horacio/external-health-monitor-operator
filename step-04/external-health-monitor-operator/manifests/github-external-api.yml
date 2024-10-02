@@ -1,0 +1,7 @@
+apiVersion: healthmonitor.lostinbrittany.org/v1alpha1
+kind: ExternalApi
+metadata:
+  name: github
+spec:
+  serviceUrl: "https://api.github.com"
+  pollingInterval: 60

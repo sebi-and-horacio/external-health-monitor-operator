@@ -89,6 +89,11 @@
       } 
     }
     ```
+1. Add the **Quarkus Scheduler** extension:
+
+    ```bash
+    quarkus ext add quarkus-scheduler
+    ```
 
 1. Use the **Quarkus Scheduler** to schedule the polling of the External APIs so you check  their status according to the polling interval you defined.
 
@@ -107,13 +112,23 @@
     import java.util.Map;
     import java.util.concurrent.ConcurrentHashMap;
 
+    import org.jboss.logging.Logger;
+
     public class ExternalApiReconciler implements Reconciler<ExternalApi> {
+
+      private static final Logger LOG = Logger.getLogger(ExternalApiReconciler.class);
+      
+
+      // Store the polling interval and external service resources
+      private final Map<String, ExternalApi> resourceMap = new ConcurrentHashMap<>();
 
       @Override
       public UpdateControl<ExternalApi> reconcile(ExternalApi resource, Context<ExternalApi> context) {
 
         String resourceName = resource.getMetadata().getName();
         resourceMap.put(resourceName, resource);  // Store the resource in the map
+
+        LOG.info("Reconciling resource: " + resourceName);
 
         // Perform an immediate health check
         checkServiceHealth(resource);
@@ -124,7 +139,7 @@
       // Periodically poll the external services based on polling interval
       @Scheduled(every = "10s")  // You can adjust this based on the smallest polling interval needed
       public void scheduledHealthCheck() {
-          for (ExternalService resource : resourceMap.values()) {
+          for (ExternalApi resource : resourceMap.values()) {
               ApiSpec spec = resource.getSpec();
               if (spec != null && spec.getPollingInterval() > 0) {
                   long now = System.currentTimeMillis() / 1000;
@@ -142,6 +157,7 @@
 
       // Method to perform the actual health check of the external service
       private void checkServiceHealth(ExternalApi resource) {
+
         ApiSpec spec = resource.getSpec();
         if (spec == null) {
             return; // No spec, can't do anything
@@ -166,13 +182,20 @@
             status.setResponseTime((int) (end - start));
             status.setLastChecked(Instant.now().toString());
 
+
         } catch (Exception e) {
             status.setHealthStatus("Error: " + e.getMessage());
             status.setLastChecked(Instant.now().toString());
         }
 
         resource.setStatus(status);
-        // Note: We're not triggering an update here immediately because this is polling based.
+        UpdateControl.updateStatus(resource);
       } 
     }
+    ```
+
+1. Run it in Quarkus dev mode:
+
+    ```bash
+    quarkus dev
     ```

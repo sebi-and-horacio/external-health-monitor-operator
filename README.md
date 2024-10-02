@@ -156,7 +156,7 @@ Talk given at:
     }
     ```
 
-### [Step 3](/step-03/)  Create the Reconciler
+### [Step 3](./step-03/): Create the Reconciler
 
 1. **Create the Reconciler Class**
 
@@ -247,6 +247,11 @@ Talk given at:
       } 
     }
     ```
+1. Add the **Quarkus Scheduler** extension:
+
+    ```bash
+    quarkus ext add quarkus-scheduler
+    ```
 
 1. Use the **Quarkus Scheduler** to schedule the polling of the External APIs so you check  their status according to the polling interval you defined.
 
@@ -265,13 +270,23 @@ Talk given at:
     import java.util.Map;
     import java.util.concurrent.ConcurrentHashMap;
 
+    import org.jboss.logging.Logger;
+
     public class ExternalApiReconciler implements Reconciler<ExternalApi> {
+
+      private static final Logger LOG = Logger.getLogger(ExternalApiReconciler.class);
+      
+
+      // Store the polling interval and external service resources
+      private final Map<String, ExternalApi> resourceMap = new ConcurrentHashMap<>();
 
       @Override
       public UpdateControl<ExternalApi> reconcile(ExternalApi resource, Context<ExternalApi> context) {
 
         String resourceName = resource.getMetadata().getName();
         resourceMap.put(resourceName, resource);  // Store the resource in the map
+
+        LOG.info("Reconciling resource: " + resourceName);
 
         // Perform an immediate health check
         checkServiceHealth(resource);
@@ -282,7 +297,7 @@ Talk given at:
       // Periodically poll the external services based on polling interval
       @Scheduled(every = "10s")  // You can adjust this based on the smallest polling interval needed
       public void scheduledHealthCheck() {
-          for (ExternalService resource : resourceMap.values()) {
+          for (ExternalApi resource : resourceMap.values()) {
               ApiSpec spec = resource.getSpec();
               if (spec != null && spec.getPollingInterval() > 0) {
                   long now = System.currentTimeMillis() / 1000;
@@ -300,6 +315,7 @@ Talk given at:
 
       // Method to perform the actual health check of the external service
       private void checkServiceHealth(ExternalApi resource) {
+
         ApiSpec spec = resource.getSpec();
         if (spec == null) {
             return; // No spec, can't do anything
@@ -324,13 +340,92 @@ Talk given at:
             status.setResponseTime((int) (end - start));
             status.setLastChecked(Instant.now().toString());
 
+
         } catch (Exception e) {
             status.setHealthStatus("Error: " + e.getMessage());
             status.setLastChecked(Instant.now().toString());
         }
 
         resource.setStatus(status);
-        // Note: We're not triggering an update here immediately because this is polling based.
+        UpdateControl.updateStatus(resource);
       } 
     }
     ```
+
+1. Run it in Quarkus dev mode:
+
+    ```bash
+    quarkus dev
+    ```
+
+
+### [Step 4](./step-04/): Deploying the CR
+
+Once the reconciler is in place, you'll need to deploy the corresponding Custom Resource Definition (CRD) and the actual custom resources to Kubernetes.
+
+To generate the CRD for your ExternalService resource, use the following command:
+
+```bash
+./mvnw install compile
+```
+
+This should generate the CRD YAML file in `target/kubernetes/`. You can then apply it to your Kubernetes cluster:
+
+```bash
+kubectl apply -f target/kubernetes/externalapis.healthmonitor.lostinbrittany.org-v1.yml
+```
+
+Next, create a custom resource to monitor an external service:
+
+**manifests/github-external-api.yml**
+```yml
+apiVersion: healthmonitor.lostinbrittany.org/v1alpha1
+kind: ExternalApi
+metadata:
+  name: github
+spec:
+  serviceUrl: "https://api.github.com"
+  pollingInterval: 60
+```
+
+Apply this resource to Kubernetes:
+
+```bash
+kubectl apply -f manifests/github-external-api.yml
+```
+
+If Quarkus is running in dev mode, you should see a log message like:
+
+```log
+2024-10-02 20:59:30,874 INFO  [org.los.hea.ExternalApiReconciler] (ReconcilerExecutor-externalapireconciler-1281) Reconciling resource: github
+```
+
+Then you can check the status of the `github` `ExternalApi` object in the cluster using `kubectl`:
+
+```bash
+kubectl get externalapi github -o yaml
+```
+
+You should see the status in the response:
+
+```yaml
+apiVersion: healthmonitor.lostinbrittany.org/v1alpha1
+kind: ExternalApi
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"healthmonitor.lostinbrittany.org/v1alpha1","kind":"ExternalApi","metadata":{"annotations":{},"name":"github","namespace":"default"},"spec":{"pollingInterval":60,"serviceUrl":"https://api.github.com"}}
+  creationTimestamp: "2024-10-01T09:36:48Z"
+  generation: 1
+  name: github
+  namespace: default
+  resourceVersion: "7842"
+  uid: d31a6fc8-2d89-4216-a76d-2c53aa358a8d
+spec:
+  pollingInterval: 60
+  serviceUrl: https://api.github.com
+status:
+  healthStatus: Healthy
+  lastChecked: "2024-10-02T18:58:11.204538609Z"
+  responseTime: 377
+```
