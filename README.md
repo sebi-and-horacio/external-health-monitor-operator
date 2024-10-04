@@ -5,6 +5,7 @@ A sample operator built in Java on Quarkus, used for the talk _Operators to the 
 Talk given at:
 
 - [Devoxx Morocco](https://devoxx.ma/talk/operators-to-the-rescue-manage-your-external-data-and-legacy-apis-from-kubernetes/) on 2024/10/03.
+- LunaConf, on 2024/10/04
 
 ## Instructions
 
