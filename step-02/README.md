@@ -8,7 +8,7 @@
     ```java
     package org.lostinbrittany.healthmonitor;
 
-    public class MySpec {
+    public class ApiSpec {
        private String serviceUrl;
        private int pollingInterval; // in seconds
 

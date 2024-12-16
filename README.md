@@ -4,7 +4,9 @@ A sample operator built in Java on Quarkus, used for the talk _Operators to the 
 
 Talk given at:
 
-- [Devoxx Morocco](https://devoxx.ma/talk/operators-to-the-rescue-manage-your-external-data-and-legacy-apis-from-kubernetes/) on 2024/10/03.
+- [Devoxx Morocco](https://devoxx.ma/talk/operators-to-the-rescue-manage-your-external-data-and-legacy-apis-from-kubernetes/) on 2024-10-03.
+- [LunaConf](https://noti.st/lostinbrittany/LrVuPf/operators-to-the-rescue-manage-your-external-data-and-legacy-apis-from-kubernetes) on 2024-10-04.
+- [Nantes JUG](https://nantesjug.org/#/events/2024_12_17) on 2024-12-17.
 
 ## Instructions
 
@@ -76,7 +78,7 @@ Talk given at:
     ```java
     package org.lostinbrittany.healthmonitor;
 
-    public class MySpec {
+    public class ApiSpec {
        private String serviceUrl;
        private int pollingInterval; // in seconds
 
@@ -259,7 +261,7 @@ Talk given at:
     package org.lostinbrittany.healthmonitor;
 
     import io.quarkus.scheduler.Scheduled;
-
+    import jakarta.inject.Inject;
     import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
     import io.javaoperatorsdk.operator.api.reconciler.Context;
     import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
@@ -270,18 +272,24 @@ Talk given at:
     import java.util.Map;
     import java.util.concurrent.ConcurrentHashMap;
 
+    import io.fabric8.kubernetes.client.KubernetesClient;
+
     import org.jboss.logging.Logger;
 
     public class ExternalApiReconciler implements Reconciler<ExternalApi> {
 
-      private static final Logger LOG = Logger.getLogger(ExternalApiReconciler.class);
-      
+    private static final Logger LOG = Logger.getLogger(ExternalApiReconciler.class);
+    
 
-      // Store the polling interval and external service resources
-      private final Map<String, ExternalApi> resourceMap = new ConcurrentHashMap<>();
+    // Store the polling interval and external service resources
+    private final Map<String, ExternalApi> resourceMap = new ConcurrentHashMap<>();
 
-      @Override
-      public UpdateControl<ExternalApi> reconcile(ExternalApi resource, Context<ExternalApi> context) {
+    // Inject the Kubernetes client to update resource status outside of the reconcile context
+    @Inject
+    KubernetesClient kubernetesClient;
+
+    @Override
+    public UpdateControl<ExternalApi> reconcile(ExternalApi resource, Context<ExternalApi> context) {
 
         String resourceName = resource.getMetadata().getName();
         resourceMap.put(resourceName, resource);  // Store the resource in the map
@@ -291,30 +299,34 @@ Talk given at:
         // Perform an immediate health check
         checkServiceHealth(resource);
 
-        return UpdateControl.noUpdate();
-      }
+        return UpdateControl.updateStatus(resource);
+    }
 
-      // Periodically poll the external services based on polling interval
-      @Scheduled(every = "10s")  // You can adjust this based on the smallest polling interval needed
-      public void scheduledHealthCheck() {
-          for (ExternalApi resource : resourceMap.values()) {
-              ApiSpec spec = resource.getSpec();
-              if (spec != null && spec.getPollingInterval() > 0) {
-                  long now = System.currentTimeMillis() / 1000;
-                  long lastChecked = resource.getStatus() != null
-                          ? Instant.parse(resource.getStatus().getLastChecked()).getEpochSecond()
-                          : 0;
-                  
-                  if (now - lastChecked >= spec.getPollingInterval()) {
-                      // Perform the health check if the interval has passed
-                      checkServiceHealth(resource);
-                  }
-              }
-          }
-      }
+    // Periodically poll the external services based on polling interval
+    @Scheduled(every = "10s")  // You can adjust this based on the smallest polling interval needed
+    public void scheduledHealthCheck() {
+        for (ExternalApi resource : resourceMap.values()) {
+            ApiSpec spec = resource.getSpec();
+            if (spec != null && spec.getPollingInterval() > 0) {
+                long now = System.currentTimeMillis() / 1000;
+                long lastChecked = resource.getStatus() != null
+                        ? Instant.parse(resource.getStatus().getLastChecked()).getEpochSecond()
+                        : 0;
+                
+                if (now - lastChecked >= spec.getPollingInterval()) {
+                    // Perform the health check if the interval has passed
+                    checkServiceHealth(resource);
+                    UpdateControl.updateStatus(resource);
 
-      // Method to perform the actual health check of the external service
-      private void checkServiceHealth(ExternalApi resource) {
+                    // After the polling, update the status in Kubernetes explicitly
+                    updateResourceStatus(resource);
+                }
+            }
+        }
+    }
+
+    // Method to perform the actual health check of the external service
+    private void checkServiceHealth(ExternalApi resource) {
 
         ApiSpec spec = resource.getSpec();
         if (spec == null) {
@@ -348,7 +360,21 @@ Talk given at:
 
         resource.setStatus(status);
         UpdateControl.updateStatus(resource);
-      } 
+
+        LOG.info("reconciler done");
+    } 
+
+    // Method to update the status in Kubernetes after the scheduled check
+    private void updateResourceStatus(ExternalApi resource) {
+        LOG.infof("Updating status for resource: %s", resource.getMetadata().getName());
+
+        // Use the Kubernetes client to update the status
+        kubernetesClient
+        .resources(ExternalApi.class)
+        .inNamespace(resource.getMetadata().getNamespace())
+        .withName(resource.getMetadata().getName())
+        .patchStatus(resource);  // This explicitly updates the status in Kubernetes
+    }
     }
     ```
 

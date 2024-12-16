@@ -1,7 +1,7 @@
 package org.lostinbrittany.healthmonitor;
 
 import io.quarkus.scheduler.Scheduled;
-
+import jakarta.inject.Inject;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
@@ -12,6 +12,8 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import io.fabric8.kubernetes.client.KubernetesClient;
+
 import org.jboss.logging.Logger;
 
 public class ExternalApiReconciler implements Reconciler<ExternalApi> {
@@ -21,6 +23,10 @@ public class ExternalApiReconciler implements Reconciler<ExternalApi> {
 
   // Store the polling interval and external service resources
   private final Map<String, ExternalApi> resourceMap = new ConcurrentHashMap<>();
+
+  // Inject the Kubernetes client to update resource status outside of the reconcile context
+  @Inject
+  KubernetesClient kubernetesClient;
 
   @Override
   public UpdateControl<ExternalApi> reconcile(ExternalApi resource, Context<ExternalApi> context) {
@@ -33,7 +39,7 @@ public class ExternalApiReconciler implements Reconciler<ExternalApi> {
     // Perform an immediate health check
     checkServiceHealth(resource);
 
-    return UpdateControl.noUpdate();
+    return UpdateControl.updateStatus(resource);
   }
 
   // Periodically poll the external services based on polling interval
@@ -50,6 +56,10 @@ public class ExternalApiReconciler implements Reconciler<ExternalApi> {
               if (now - lastChecked >= spec.getPollingInterval()) {
                   // Perform the health check if the interval has passed
                   checkServiceHealth(resource);
+                  UpdateControl.updateStatus(resource);
+
+                  // After the polling, update the status in Kubernetes explicitly
+                  updateResourceStatus(resource);
               }
           }
       }
@@ -90,5 +100,19 @@ public class ExternalApiReconciler implements Reconciler<ExternalApi> {
 
     resource.setStatus(status);
     UpdateControl.updateStatus(resource);
+
+    LOG.info("reconciler done");
   } 
+
+  // Method to update the status in Kubernetes after the scheduled check
+  private void updateResourceStatus(ExternalApi resource) {
+    LOG.infof("Updating status for resource: %s", resource.getMetadata().getName());
+
+    // Use the Kubernetes client to update the status
+    kubernetesClient
+      .resources(ExternalApi.class)
+      .inNamespace(resource.getMetadata().getNamespace())
+      .withName(resource.getMetadata().getName())
+      .patchStatus(resource);  // This explicitly updates the status in Kubernetes
+  }
 }
